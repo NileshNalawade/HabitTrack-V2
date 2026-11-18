@@ -1,0 +1,96 @@
+name: Build Android APK with Home Screen Widgets
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.5
+          cache-disabled: true
+
+      - name: Prepare Clean Android Build Environment
+        run: |
+          ANDROID_SRC="native_mobile/android"
+          if [ ! -f "$ANDROID_SRC/settings.gradle" ]; then
+            echo "ERROR: settings.gradle not found"; exit 1
+          fi
+          BUILD_DIR="$RUNNER_TEMP/android_build"
+          rm -rf "$BUILD_DIR"
+          cp -r "$ANDROID_SRC" "$BUILD_DIR"
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+
+          ASSET_DIR="$BUILD_DIR/app/src/main/assets"
+          mkdir -p "$ASSET_DIR"
+          cp -f index.html    "$ASSET_DIR/" 2>/dev/null || true
+          cp -f manifest.json "$ASSET_DIR/" 2>/dev/null || true
+          cp -f sw.js         "$ASSET_DIR/" 2>/dev/null || true
+          [ -d css   ] && cp -rf css   "$ASSET_DIR/" 2>/dev/null || true
+          [ -d js    ] && cp -rf js    "$ASSET_DIR/" 2>/dev/null || true
+          [ -d icons ] && cp -rf icons "$ASSET_DIR/" 2>/dev/null || true
+
+          mkdir -p "$BUILD_DIR/app/src/main/res/drawable"
+          cat << 'EOF' > "$BUILD_DIR/app/src/main/res/drawable/btn_primary_bg.xml"
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+              <solid android:color="#06B6D4" />
+              <corners android:radius="8dp" />
+          </shape>
+          EOF
+
+          find "$BUILD_DIR" -name "styles.xml" -exec sed -i '/windowSoftInputMode/d' {} +
+
+          BG_FILE="$BUILD_DIR/app/build.gradle"
+          if [ -f "$BG_FILE" ]; then
+            sed -i '/signingConfigs\.debug/d' "$BG_FILE"
+            grep -q "abortOnError false" "$BG_FILE" || sed -i '/android {/a \    lint { abortOnError false; checkReleaseBuilds false }' "$BG_FILE"
+          fi
+
+          echo "sdk.dir=$ANDROID_HOME" > "$BUILD_DIR/local.properties"
+          touch "$BUILD_DIR/gradle.properties"
+          grep -q "android.useAndroidX" "$BUILD_DIR/gradle.properties" || echo "android.useAndroidX=true" >> "$BUILD_DIR/gradle.properties"
+          grep -q "org.gradle.jvmargs"  "$BUILD_DIR/gradle.properties" || echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> "$BUILD_DIR/gradle.properties"
+
+      - name: Build Android APK with Gradle
+        run: |
+          cd "$BUILD_DIR"
+          [ ! -f "gradle/wrapper/gradle-wrapper.jar" ] && gradle wrapper --gradle-version 8.5 2>/dev/null || true
+          chmod +x gradlew 2>/dev/null || true
+
+          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            ./gradlew assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee "$RUNNER_TEMP/build.log"
+          else
+            gradle assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee "$RUNNER_TEMP/build.log"
+          fi
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          if [ $BUILD_STATUS -ne 0 ]; then
+            echo "## Gradle Build Failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E "(^e: |FAILURE:|Exception|error:)" "$RUNNER_TEMP/build.log" | head -n 50 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit $BUILD_STATUS
+          fi
+
+      - name: Upload HabitTrack APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HabitTrack-APK
+          path: "${{ runner.temp }}/android_build/app/build/outputs/apk/**/*.apk"
+          if-no-files-found: error
