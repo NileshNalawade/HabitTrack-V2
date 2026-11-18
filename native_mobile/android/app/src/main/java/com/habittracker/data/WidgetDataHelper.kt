@@ -98,7 +98,7 @@ object WidgetDataHelper {
                         .putString(KEY_DATE, today)
                         .remove(KEY_PENDING_TOGGLES) // Reset old day pending widget clicks
                         .apply()
-                } else if (cachedDate.isEmpty()) {
+                } else if (cachedDate.isNullOrEmpty()) {
                     prefs.edit().putString(KEY_DATE, today).apply()
                 }
             } catch (e: Exception) {
