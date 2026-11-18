@@ -1,4 +1,3 @@
-
 name: Build Android APK with Home Screen Widgets
 
 on:
@@ -28,159 +27,71 @@ jobs:
 
       - name: Prepare Clean Android Build Environment
         run: |
-          # Android source is now at a clean path with no spaces
           ANDROID_SRC="native_mobile/android"
-
-          # Validate the project exists
           if [ ! -f "$ANDROID_SRC/settings.gradle" ]; then
-            echo "ERROR: settings.gradle not found at $ANDROID_SRC/settings.gradle"
-            exit 1
+            echo "ERROR: settings.gradle not found"; exit 1
           fi
-
-          echo "Found Android source at: $ANDROID_SRC"
-
-          # Copy to RUNNER_TEMP to guarantee no spaces in build path
           BUILD_DIR="$RUNNER_TEMP/android_build"
           rm -rf "$BUILD_DIR"
           cp -r "$ANDROID_SRC" "$BUILD_DIR"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
 
-          # Sync web assets into app/src/main/assets
           ASSET_DIR="$BUILD_DIR/app/src/main/assets"
           mkdir -p "$ASSET_DIR"
-          cp -f index.html          "$ASSET_DIR/" 2>/dev/null || true
-          cp -f manifest.json       "$ASSET_DIR/" 2>/dev/null || true
-          cp -f sw.js               "$ASSET_DIR/" 2>/dev/null || true
+          cp -f index.html    "$ASSET_DIR/" 2>/dev/null || true
+          cp -f manifest.json "$ASSET_DIR/" 2>/dev/null || true
+          cp -f sw.js         "$ASSET_DIR/" 2>/dev/null || true
           [ -d css   ] && cp -rf css   "$ASSET_DIR/" 2>/dev/null || true
           [ -d js    ] && cp -rf js    "$ASSET_DIR/" 2>/dev/null || true
           [ -d icons ] && cp -rf icons "$ASSET_DIR/" 2>/dev/null || true
 
-          # Ensure valid button drawable exists
           mkdir -p "$BUILD_DIR/app/src/main/res/drawable"
-          cat << 'EOF' > "$BUILD_DIR/app/src/main/res/drawable/btn_primary_bg.xml"
+          cat << 'XMLEOF' > "$BUILD_DIR/app/src/main/res/drawable/btn_primary_bg.xml"
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
               <solid android:color="#06B6D4" />
               <corners android:radius="8dp" />
           </shape>
-          EOF
+          XMLEOF
 
-          # Strip invalid windowSoftInputMode from all styles.xml
           find "$BUILD_DIR" -name "styles.xml" -exec sed -i '/windowSoftInputMode/d' {} +
 
-          # Sanitize app/build.gradle: remove undefined signingConfigs.debug and ensure lint options
           BG_FILE="$BUILD_DIR/app/build.gradle"
           if [ -f "$BG_FILE" ]; then
             sed -i '/signingConfigs\.debug/d' "$BG_FILE"
-            if ! grep -q "abortOnError false" "$BG_FILE"; then
-              sed -i '/android {/a \    lint { abortOnError false; checkReleaseBuilds false }' "$BG_FILE"
-            fi
+            grep -q "abortOnError false" "$BG_FILE" || sed -i '/android {/a \    lint { abortOnError false; checkReleaseBuilds false }' "$BG_FILE"
           fi
 
-          # Inject clean WidgetActionReceiver.kt
-          REC_DIR="$BUILD_DIR/app/src/main/java/com/habittracker/widget"
-          mkdir -p "$REC_DIR"
-          cat << 'EOF' > "$REC_DIR/WidgetActionReceiver.kt"
-          package com.habittracker.widget
+          # Fix nullable String Kotlin errors in WidgetDataHelper.kt
+          WDHELPER="$BUILD_DIR/app/src/main/java/com/habittracker/data/WidgetDataHelper.kt"
+          if [ -f "$WDHELPER" ]; then
+            sed -i 's/cachedDate\.isNotEmpty()/!cachedDate.isNullOrEmpty()/g' "$WDHELPER"
+            sed -i 's/cachedDate\.isEmpty()/cachedDate.isNullOrEmpty()/g' "$WDHELPER"
+          fi
 
-          import android.content.BroadcastReceiver
-          import android.content.Context
-          import android.content.Intent
-          import android.widget.Toast
-          import com.habittracker.data.WidgetDataHelper
-
-          class WidgetActionReceiver : BroadcastReceiver() {
-              override fun onReceive(context: Context, intent: Intent) {
-                  when (intent.action) {
-                      ACTION_TOGGLE_HABIT -> {
-                          val logId = intent.getStringExtra(EXTRA_LOG_ID) ?: return
-                          WidgetDataHelper.toggleHabit(context, logId)
-                          WidgetDataHelper.refreshHabitWidget(context)
-                      }
-                      ACTION_CYCLE_DAY_TYPE -> {
-                          val nextType = WidgetDataHelper.cycleDayType(context)
-                          WidgetDataHelper.refreshHabitWidget(context)
-                          Toast.makeText(context, "Day set to: $nextType", Toast.LENGTH_SHORT).show()
-                      }
-                      ACTION_QUICK_ADD_20 -> {
-                          WidgetDataHelper.addExpense(context, "Quick Spend", 20.0)
-                          val total = WidgetDataHelper.getTodayExpenseTotal(context)
-                          Toast.makeText(context, "Added +₹20.00! Today: ₹${String.format("%.2f", total)}", Toast.LENGTH_SHORT).show()
-                      }
-                      ACTION_QUICK_ADD_50 -> {
-                          WidgetDataHelper.addExpense(context, "Quick Spend", 50.0)
-                          val total = WidgetDataHelper.getTodayExpenseTotal(context)
-                          Toast.makeText(context, "Added +₹50.00! Today: ₹${String.format("%.2f", total)}", Toast.LENGTH_SHORT).show()
-                      }
-                      ACTION_QUICK_ADD_100 -> {
-                          WidgetDataHelper.addExpense(context, "Quick Spend", 100.0)
-                          val total = WidgetDataHelper.getTodayExpenseTotal(context)
-                          Toast.makeText(context, "Added +₹100.00! Today: ₹${String.format("%.2f", total)}", Toast.LENGTH_SHORT).show()
-                      }
-                      ACTION_QUICK_ADD_200 -> {
-                          WidgetDataHelper.addExpense(context, "Quick Spend", 200.0)
-                          val total = WidgetDataHelper.getTodayExpenseTotal(context)
-                          Toast.makeText(context, "Added +₹200.00! Today: ₹${String.format("%.2f", total)}", Toast.LENGTH_SHORT).show()
-                      }
-                      ACTION_QUICK_ADD_500 -> {
-                          WidgetDataHelper.addExpense(context, "Quick Spend", 500.0)
-                          val total = WidgetDataHelper.getTodayExpenseTotal(context)
-                          Toast.makeText(context, "Added +₹500.00! Today: ₹${String.format("%.2f", total)}", Toast.LENGTH_SHORT).show()
-                      }
-                  }
-              }
-
-              companion object {
-                  const val ACTION_TOGGLE_HABIT   = "com.habittracker.ACTION_TOGGLE_HABIT"
-                  const val ACTION_CYCLE_DAY_TYPE = "com.habittracker.ACTION_CYCLE_DAY_TYPE"
-                  const val ACTION_QUICK_ADD_20   = "com.habittracker.ACTION_QUICK_ADD_20"
-                  const val ACTION_QUICK_ADD_50   = "com.habittracker.ACTION_QUICK_ADD_50"
-                  const val ACTION_QUICK_ADD_100  = "com.habittracker.ACTION_QUICK_ADD_100"
-                  const val ACTION_QUICK_ADD_200  = "com.habittracker.ACTION_QUICK_ADD_200"
-                  const val ACTION_QUICK_ADD_500  = "com.habittracker.ACTION_QUICK_ADD_500"
-                  const val EXTRA_LOG_ID          = "com.habittracker.EXTRA_LOG_ID"
-              }
-          }
-          EOF
-
-          # Overwrite root build.gradle with correct repo list (add gradlePluginPortal)
-          cat << 'EOF' > "$BUILD_DIR/build.gradle"
+          cat << 'BEOF' > "$BUILD_DIR/build.gradle"
           buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.2.2'
                   classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
               }
           }
           allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
           }
-          EOF
+          BEOF
 
-          # Overwrite settings.gradle with pluginManagement block
-          cat << 'EOF' > "$BUILD_DIR/settings.gradle"
+          cat << 'SEOF' > "$BUILD_DIR/settings.gradle"
           pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
           }
           rootProject.name = "HabitTrack"
           include ':app'
-          EOF
+          SEOF
 
-          # Force correct gradle-wrapper.properties
           mkdir -p "$BUILD_DIR/gradle/wrapper"
-          cat << 'EOF' > "$BUILD_DIR/gradle/wrapper/gradle-wrapper.properties"
+          cat << 'WEOF' > "$BUILD_DIR/gradle/wrapper/gradle-wrapper.properties"
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
           distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
@@ -188,46 +99,34 @@ jobs:
           validateDistributionUrl=true
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
-          EOF
+          WEOF
 
-          # Configure local.properties and gradle.properties
           echo "sdk.dir=$ANDROID_HOME" > "$BUILD_DIR/local.properties"
-          cat << 'EOF' > "$BUILD_DIR/gradle.properties"
+          cat << 'PEOF' > "$BUILD_DIR/gradle.properties"
           android.useAndroidX=true
           android.enableJetifier=true
           org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
           org.gradle.daemon=false
-          EOF
+          PEOF
 
       - name: Build Android APK with Gradle
         run: |
           cd "$BUILD_DIR"
-
-          # Regenerate wrapper jar if missing
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Regenerating Gradle wrapper jar..."
-            gradle wrapper --gradle-version 8.5 2>/dev/null || true
-          fi
-
+          [ ! -f "gradle/wrapper/gradle-wrapper.jar" ] && gradle wrapper --gradle-version 8.5 2>/dev/null || true
           chmod +x gradlew 2>/dev/null || true
-
-          # Run build and capture output for the summary
           if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
             ./gradlew assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee "$RUNNER_TEMP/build.log"
           else
             gradle assembleDebug --stacktrace --no-daemon --console=plain 2>&1 | tee "$RUNNER_TEMP/build.log"
           fi
           BUILD_STATUS=${PIPESTATUS[0]}
-
           if [ $BUILD_STATUS -ne 0 ]; then
-            echo "## ❌ Gradle Build Failed" >> $GITHUB_STEP_SUMMARY
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            grep -E "(^e: |^w: |FAILURE:|Exception|error:)" "$RUNNER_TEMP/build.log" | head -n 50 >> $GITHUB_STEP_SUMMARY
+            echo "## Gradle Build Failed" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E "(^e: |FAILURE:|Exception|error:)" "$RUNNER_TEMP/build.log" | head -n 50 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit $BUILD_STATUS
           fi
-
-          echo "## ✅ Build Succeeded" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload HabitTrack APK
         uses: actions/upload-artifact@v4
